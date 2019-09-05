@@ -8,6 +8,8 @@ Mass move:
 
 # Planned Functions
 Dunno, give me some input...
+- Follower
+- Server backup
 
 # Installation
 
