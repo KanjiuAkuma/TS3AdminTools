@@ -7,7 +7,7 @@ ts_plugin_dir = "C:/Users/Kanjiu Akuma/AppData/Roaming/TS3Client/plugins"
 workspace "Ts3AdminTools"
 	architecture "x64"
 
-    configurations
+	configurations
 	{
 		"Debug",
 		"Release",
@@ -36,15 +36,15 @@ project "Ts3AdminTools"
 	}
 
 	filter "configurations:Debug"
-        symbols "Full"
+		symbols "Full"
 		kind "SharedLib"
 		defines {
-            "AT_DEBUG"
+			"AT_DEBUG"
 		}
 
 	filter "configurations:Release"
-        kind "SharedLib"
-        optimize "On"
+		kind "SharedLib"
+		optimize "On"
 		defines {
-            "AT_RELEASE"
+			"AT_RELEASE"
 		}
