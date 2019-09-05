@@ -413,12 +413,10 @@ void moveClientsToOwnChannel(uint64 serverConnectionHandlerID, uint64 channelID)
 	anyID *clients;
 	R_CALL(ts3Functions.getChannelClientList(serverConnectionHandlerID, channelID, &clients), "Error retrieving channel client list!");
 
-
-
-
 	for (anyID* c = clients; *c != (anyID) NULL; c++) {
 		printf("Moving client %hu\n", *c);
 		CALL(ts3Functions.requestClientMove(serverConnectionHandlerID, *c, clientChannelID, "", NULL), "Error moving client!");
 	}
 	ts3Functions.freeMemory(clients);
+
 }
