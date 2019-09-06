@@ -81,6 +81,18 @@ static int wcharToUtf8(const wchar_t* str, char** result) {
 #define RV_CALL(x, msg, rv) {unsigned int r = x; if (r != ERROR_ok) {printf("Error %d at '%s'\n", r, msg); return rv;}}
 #endif
 
+/*
+ * Menu IDs for this plugin. Pass these IDs when creating a menuitem to the TS3 client. When the menu item is triggered,
+ * ts3plugin_onMenuItemEvent will be called passing the menu ID of the triggered menu item.
+ * These IDs are freely choosable by the plugin author. It's not really needed to use an enum, it just looks prettier.
+ */
+enum {
+	MENU_ID_CHANNEL_1,
+	MENU_ID_CHANNEL_2,
+	MENU_ID_CLIENT_1,
+	MENU_ID_CLIENT_2,
+};
+
 /*********************************** Required functions ************************************/
 /*
  * If any of these required functions is not implemented, TS3 will refuse to load the plugin
@@ -245,10 +257,51 @@ const char* ts3plugin_infoTitle() {
  * "data" to NULL to have the client ignore the info data.
  */
 void ts3plugin_infoData(uint64 serverConnectionHandlerID, uint64 id, enum PluginItemType type, char** data) {
-	channel_selected = type == PLUGIN_CHANNEL;
-	if (channel_selected) selected_channel = id;
-	user_selected = type == PLUGIN_CLIENT;
-	if (user_selected) selected_user = id;
+	if (type == PLUGIN_CHANNEL) {
+		anyID clientID;
+		R_CALL(ts3Functions.getClientID(serverConnectionHandlerID, &clientID), "Error retrieving client id!");
+
+		uint64 clientChannelID;
+		R_CALL(ts3Functions.getChannelOfClient(serverConnectionHandlerID, clientID, &clientChannelID), "Error retrieving client channel!");
+
+		if (clientChannelID == id) { // channel is clients channel -> disable move menu items
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CHANNEL_1, 0);
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CHANNEL_2, 0);
+			selected_channel = 0;
+			channel_selected = false;
+		}
+		else {
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CHANNEL_1, 1);
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CHANNEL_2, 1);
+			selected_channel = id;
+			channel_selected = true;
+		}
+	}
+	
+	if (type == PLUGIN_CLIENT) {
+		anyID clientID;
+		R_CALL(ts3Functions.getClientID(serverConnectionHandlerID, &clientID), "Error retrieving client id!");
+
+		if (clientID == id) { // is myself -> disable follow menu items
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 0);
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 0);
+			user_selected = false;
+			selected_user = 0;
+		}
+		else {
+			user_selected = true;
+			selected_user = id;
+			if (follow_enable) {
+				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 0);
+				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 1);
+			}
+			else {
+				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 1);
+				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 0);
+			}
+		}
+		
+	}
 }
 
 /* Required to release the memory for parameter "data" allocated in ts3plugin_infoData and ts3plugin_initMenus */
@@ -279,18 +332,6 @@ static struct PluginMenuItem* createMenuItem(enum PluginMenuType type, int id, c
 #define BEGIN_CREATE_MENUS(x) const size_t sz = x + 1; size_t n = 0; *menuItems = (struct PluginMenuItem**)malloc(sizeof(struct PluginMenuItem*) * sz);
 #define CREATE_MENU_ITEM(a, b, c, d) (*menuItems)[n++] = createMenuItem(a, b, c, d);
 #define END_CREATE_MENUS (*menuItems)[n++] = NULL; assert(n == sz);
-
-/*
- * Menu IDs for this plugin. Pass these IDs when creating a menuitem to the TS3 client. When the menu item is triggered,
- * ts3plugin_onMenuItemEvent will be called passing the menu ID of the triggered menu item.
- * These IDs are freely choosable by the plugin author. It's not really needed to use an enum, it just looks prettier.
- */
-enum {
-	MENU_ID_CHANNEL_1,
-	MENU_ID_CHANNEL_2,
-	MENU_ID_CLIENT_1,
-	MENU_ID_CLIENT_2,
-};
 
 /*
  * Initialize plugin menus.
