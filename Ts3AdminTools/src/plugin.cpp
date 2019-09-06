@@ -40,8 +40,23 @@ static struct TS3Functions ts3Functions;
 #define RETURNCODE_BUFSIZE 128
 
 static char* pluginID = NULL;
+
+
+/*********************************** Mass move variables ************************************/
+/*
+ * 
+ */
+static bool channel_selected = false;
 static uint64 selected_channel = 0;
-static boolean channel_selected = false;
+
+/*********************************** Follow variables ************************************/
+/*
+ *
+ */
+static bool follow_enable = false;
+static anyID follow_target = 0;
+static bool user_selected = false;
+static anyID selected_user = 0;
 
 #ifdef _WIN32
 /* Helper function to convert wchar_T to Utf-8 encoded strings on Windows */
@@ -57,13 +72,13 @@ static int wcharToUtf8(const wchar_t* str, char** result) {
 #endif
 
 #ifdef AT_RELEASE
-#define ASSERT(x, msg)
-#define R_ASSERT(x, msg)
-#define RV_ASSERT(x, msg, rv)
+#define ASSERT(x, msg) x
+#define R_ASSERT(x, msg) {unsigend r = x; if (r != ERROR_ok) return;}
+#define RV_ASSERT(x, msg, rv) {unsigend r = x; if (r != ERROR_ok) return rv;}
 #else
-#define CALL(x, msg) {unsigned int r = x; if (r != ERROR_ok) {printf("Error %d at '%s'", r, msg);}}
-#define R_CALL(x, msg) {unsigned int r = x; if (r != ERROR_ok) {printf("Error %d at '%s'", r, msg); return;}}
-#define RV_CALL(x, msg, rv) {unsigned int r = x; if (r != ERROR_ok) {printf("Error %d at '%s'", r, msg); return rv;}}
+#define CALL(x, msg) {unsigned int r = x; if (r != ERROR_ok) {printf("Error %d at '%s'\n", r, msg);}}
+#define R_CALL(x, msg) {unsigned int r = x; if (r != ERROR_ok) {printf("Error %d at '%s'\n", r, msg); return;}}
+#define RV_CALL(x, msg, rv) {unsigned int r = x; if (r != ERROR_ok) {printf("Error %d at '%s'\n", r, msg); return rv;}}
 #endif
 
 /*********************************** Required functions ************************************/
@@ -231,6 +246,9 @@ const char* ts3plugin_infoTitle() {
  */
 void ts3plugin_infoData(uint64 serverConnectionHandlerID, uint64 id, enum PluginItemType type, char** data) {
 	channel_selected = type == PLUGIN_CHANNEL;
+	if (channel_selected) selected_channel = id;
+	user_selected = type == PLUGIN_CLIENT;
+	if (user_selected) selected_user = id;
 }
 
 /* Required to release the memory for parameter "data" allocated in ts3plugin_infoData and ts3plugin_initMenus */
@@ -270,6 +288,8 @@ static struct PluginMenuItem* createMenuItem(enum PluginMenuType type, int id, c
 enum {
 	MENU_ID_CHANNEL_1,
 	MENU_ID_CHANNEL_2,
+	MENU_ID_CLIENT_1,
+	MENU_ID_CLIENT_2,
 };
 
 /*
@@ -279,10 +299,13 @@ enum {
  * If plugin menus are not used by a plugin, do not implement this function or return NULL.
  */
 void ts3plugin_initMenus(struct PluginMenuItem*** menuItems, char** menuIcon) {
-	BEGIN_CREATE_MENUS(2);  /* IMPORTANT: Number of menu items must be correct! */
+	BEGIN_CREATE_MENUS(4);  /* IMPORTANT: Number of menu items must be correct! */
 	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CHANNEL, MENU_ID_CHANNEL_1, "Move all users from this channel to your channel", "1.png");
 	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CHANNEL, MENU_ID_CHANNEL_2, "Move all users from your channel to this channel", "2.png");
+	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CLIENT, MENU_ID_CLIENT_1, "Follow", "3.png");
+	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CLIENT, MENU_ID_CLIENT_2, "Unfollow", "4.png");
 	END_CREATE_MENUS;  /* Includes an assert checking if the number of menu items matched */
+	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 0);
 }
 
 /* Helper function to create a hotkey */
@@ -308,9 +331,11 @@ void ts3plugin_initHotkeys(struct PluginHotkey*** hotkeys) {
 	 * The keyword will be later passed to ts3plugin_onHotkeyEvent to identify which hotkey was triggered.
 	 * The description is shown in the clients hotkey dialog. */
 	
-	BEGIN_CREATE_HOTKEYS(2);  // Create hotkeys. Size must be correct for allocating memory.
+	BEGIN_CREATE_HOTKEYS(4);  // Create hotkeys. Size must be correct for allocating memory.
 	CREATE_HOTKEY("MoveToOwnChannel", "Move clients from selected channel to my channel");
 	CREATE_HOTKEY("MoveToSelectedChannel", "Move clients from my channel to selected channel");
+	CREATE_HOTKEY("Follow", "Follow user");
+	CREATE_HOTKEY("Unfollow", "Unfollow user");
 	END_CREATE_HOTKEYS;
 
 	/* The client will call ts3plugin_freeMemory to release all allocated memory */
@@ -344,6 +369,19 @@ void ts3plugin_onMenuItemEvent(uint64 serverConnectionHandlerID, enum PluginMenu
 		// Menu channel 2 was triggered (move users to target)
 		moveClientsToSelectedChannel(serverConnectionHandlerID, selectedItemID);
 		break;
+	case MENU_ID_CLIENT_1:
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 0);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 1);
+		follow_enable = true;
+		follow_target = selectedItemID;
+		join(serverConnectionHandlerID, follow_target);
+		break;
+	case MENU_ID_CLIENT_2:
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 1);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 0);
+		follow_enable = false;
+		follow_target = 0;
+		break;
 	default:
 		break;
 	}
@@ -352,15 +390,28 @@ void ts3plugin_onMenuItemEvent(uint64 serverConnectionHandlerID, enum PluginMenu
 
 /* This function is called if a plugin hotkey was pressed. Omit if hotkeys are unused. */
 void ts3plugin_onHotkeyEvent(const char* keyword) {
-	printf("PLUGIN: Hotkey event: %s, selection %llu, is_selected: %d, own: %d, selected: %d\n", keyword, selected_channel, channel_selected, strncmp(keyword, "MoveToOwnChannel", strlen(keyword)), strncmp(keyword, "MoveToSelectedChannel", strlen(keyword)));
+	printf("PLUGIN: Hotkey event: %s\n", keyword);
 	/* Identify the hotkey by keyword ("keyword_1", "keyword_2" or "keyword_3" in this example) and handle here... */
-	if (strncmp(keyword, "MoveToOwnChannel", strlen(keyword)) == 0 && channel_selected == 1) {
+	if (strncmp(keyword, "MoveToOwnChannel", strlen(keyword)) == 0 && channel_selected) {
 		printf("Moving to own channel!\n");
 		moveClientsToOwnChannel(ts3Functions.getCurrentServerConnectionHandlerID(), selected_channel);
 	}
-	else if (strncmp(keyword, "MoveToSelectedChannel", strlen(keyword)) == 0 && channel_selected == 1) {
+	else if (strncmp(keyword, "MoveToSelectedChannel", strlen(keyword)) == 0 && channel_selected) {
 		printf("Moving to selected channel!\n");
 		moveClientsToSelectedChannel(ts3Functions.getCurrentServerConnectionHandlerID(), selected_channel);
+	}
+	else if (strncmp(keyword, "Follow", strlen(keyword)) == 0 && user_selected) {
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 0);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 1);
+		follow_enable = true;
+		follow_target = selected_user;
+		join(ts3Functions.getCurrentServerConnectionHandlerID(), follow_target);
+	}
+	else if (strncmp(keyword, "Unfollow", strlen(keyword)) == 0 && follow_enable) {
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 1);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 0);
+		follow_enable = false;
+		follow_target = 0;
 	}
 }
 
@@ -385,6 +436,42 @@ const char* ts3plugin_displayKeyText(const char* keyIdentifier) {
 const char* ts3plugin_keyPrefix() {
 	return "JAT";
 }
+
+void ts3plugin_onClientMoveEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, const char* moveMessage) {
+	printf("Client moved (Self)! clid=%d, oCid=%llu, nCid=%llu\n", clientID, oldChannelID, newChannelID);
+	if (follow_enable && follow_target == clientID) {
+		follow(serverConnectionHandlerID, newChannelID);
+	}
+}
+
+void ts3plugin_onClientMoveTimeoutEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, const char* timeoutMessage) {
+	printf("Client moved (Timeout)! clid=%d, oCid=%llu, nCid=%llu\n", clientID, oldChannelID, newChannelID);
+	if (follow_enable && follow_target == clientID) {
+		follow(serverConnectionHandlerID, newChannelID);
+	}
+}
+
+void ts3plugin_onClientMoveMovedEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, anyID moverID, const char* moverName, const char* moverUniqueIdentifier, const char* moveMessage) {
+	printf("Client moved (Got moved)! clid=%d, oCid=%llu, nCid=%llu\n", clientID, oldChannelID, newChannelID);
+	if (follow_enable && follow_target == clientID) {
+		follow(serverConnectionHandlerID, newChannelID);
+	}
+}
+
+void ts3plugin_onClientKickFromChannelEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, anyID kickerID, const char* kickerName, const char* kickerUniqueIdentifier, const char* kickMessage) {
+	printf("Client moved (Kick from channel! clid=%d, oCid=%llu, nCid=%llu\n", clientID, oldChannelID, newChannelID);
+	if (follow_enable && follow_target == clientID) {
+		follow(serverConnectionHandlerID, newChannelID);
+	}
+}
+
+void ts3plugin_onClientKickFromServerEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, anyID kickerID, const char* kickerName, const char* kickerUniqueIdentifier, const char* kickMessage) {
+	printf("Client moved (Kick from server)! clid=%d, oCid=%llu, nCid=%llu\n", clientID, oldChannelID, newChannelID);
+	if (follow_enable && follow_target == clientID) {
+		follow(serverConnectionHandlerID, newChannelID);
+	}
+}
+
 
 void moveClientsToSelectedChannel(uint64 serverConnectionHandlerID, uint64 channelID) {
 	anyID clientID;
@@ -419,4 +506,31 @@ void moveClientsToOwnChannel(uint64 serverConnectionHandlerID, uint64 channelID)
 	}
 	ts3Functions.freeMemory(clients);
 
+}
+
+void join(uint64 serverConnectionHandlerID, anyID targetClientID) {
+	anyID myClientID;
+	R_CALL(ts3Functions.getClientID(serverConnectionHandlerID, &myClientID), "Error retrieving client id!");
+
+	uint64 myChannelID;
+	R_CALL(ts3Functions.getChannelOfClient(serverConnectionHandlerID, myClientID, &myChannelID), "Error retrieving client channel!");
+
+	uint64 targetChannelId;
+	R_CALL(ts3Functions.getChannelOfClient(serverConnectionHandlerID, targetClientID, &targetChannelId), "Error retrieving target channel!");
+
+	if (myChannelID != targetChannelId) {
+		CALL(ts3Functions.requestClientMove(serverConnectionHandlerID, myClientID, targetChannelId, "", NULL), "Error moving client!");
+	}
+}
+
+void follow(uint64 serverConnectionHandlerID, uint64 newChannelID) {
+	anyID myClientID;
+	R_CALL(ts3Functions.getClientID(serverConnectionHandlerID, &myClientID), "Error retrieving client id!");
+
+	uint64 myChannelID;
+	R_CALL(ts3Functions.getChannelOfClient(serverConnectionHandlerID, myClientID, &myChannelID), "Error retrieving client channel!");
+
+	if (myChannelID != newChannelID) {
+		CALL(ts3Functions.requestClientMove(serverConnectionHandlerID, myClientID, newChannelID, "", NULL), "Error moving client!");
+	}
 }

@@ -3,12 +3,11 @@ Ts3 Utility Functions
 
 # Available Functions
 
-Mass move:
-	- From channel to client's channel and vice versa
+Mass move
+Client follow
 
 # Planned Functions
 Dunno, give me some input...
-- Follower
 - Server backup
 
 # Installation

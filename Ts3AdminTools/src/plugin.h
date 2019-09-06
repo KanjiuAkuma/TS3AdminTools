@@ -147,6 +147,8 @@ PLUGINS_EXPORTDLL const char* ts3plugin_keyPrefix();
 /* My Functions */
 void moveClientsToOwnChannel(uint64 serverConnectionHandlerID, uint64 channelID);
 void moveClientsToSelectedChannel(uint64 serverConnectionHandlerID, uint64 channelID);
+void join(uint64 serverConnectionHandlerID, anyID targetClientID);
+void follow(uint64 serverConnectionHandlerID, uint64 newChannelID);
 
 #ifdef __cplusplus
 }
