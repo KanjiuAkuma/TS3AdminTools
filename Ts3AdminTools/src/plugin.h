@@ -150,8 +150,10 @@ void moveClientsToSelectedChannel(uint64 serverConnectionHandlerID, uint64 chann
 
 void onClientMoved(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, bool was_moved, const char* moveType);
 void lockUser(uint64 serverConnectionHandlerID, anyID userID);
-void unlockUser(anyID userID);
+void unlockUser(uint64 serverConnectionHandlerID, anyID userID);
 void join(uint64 serverConnectionHandlerID, anyID targetClientID);
+void enableFollow(uint64 serverConnectionHandlerID, anyID targetID);
+void disableFollow();
 void follow(uint64 serverConnectionHandlerID, uint64 newChannelID);
 
 #ifdef __cplusplus
