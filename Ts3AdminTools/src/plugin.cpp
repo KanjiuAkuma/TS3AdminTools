@@ -112,6 +112,7 @@ enum {
 	MENU_ID_CLIENT_LOCK_MOVEMENT,
 	MENU_ID_CLIENT_UNLOCK_MOVEMENT,
 	MENU_ID_GLOBAL_UNFOLLOW,
+	MENU_ID_GLOBAL_UNLOCK_MOVEMENT,
 };
 
 /*********************************** Required functions ************************************/
@@ -376,20 +377,22 @@ static struct PluginMenuItem* createMenuItem(enum PluginMenuType type, int id, c
  * If plugin menus are not used by a plugin, do not implement this function or return NULL.
  */
 void ts3plugin_initMenus(struct PluginMenuItem*** menuItems, char** menuIcon) {
-	BEGIN_CREATE_MENUS(7);  /* IMPORTANT: Number of menu items must be correct! */
+	BEGIN_CREATE_MENUS(8);  /* IMPORTANT: Number of menu items must be correct! */
 	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CHANNEL, MENU_ID_CHANNEL_FROM, "Move all users from this channel to your channel", "1.png");
 	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CHANNEL, MENU_ID_CHANNEL_TO, "Move all users from your channel to this channel", "2.png");
 	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CLIENT, MENU_ID_CLIENT_FOLLOW, "Follow", "3.png");
 	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CLIENT, MENU_ID_CLIENT_UNFOLLOW, "Unfollow", "4.png");
 	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CLIENT, MENU_ID_CLIENT_LOCK_MOVEMENT, "Lock movement", "5.png");
 	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CLIENT, MENU_ID_CLIENT_UNLOCK_MOVEMENT, "Unlock movement", "6.png");
-	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_GLOBAL, MENU_ID_GLOBAL_UNFOLLOW, "Unfollow", "7.png")
+	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_GLOBAL, MENU_ID_GLOBAL_UNFOLLOW, "Unfollow", "7.png");
+	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_GLOBAL, MENU_ID_GLOBAL_UNLOCK_MOVEMENT, "Unlock all client movement", "8.png");
 	END_CREATE_MENUS;  /* Includes an assert checking if the number of menu items matched */
 
 	// disable 'reverse actions'
 	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNFOLLOW, 0);
 	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNLOCK_MOVEMENT, 0);
 	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_GLOBAL_UNFOLLOW, 0);
+	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_GLOBAL_UNLOCK_MOVEMENT, 0);
 }
 
 /* Helper function to create a hotkey */
@@ -415,11 +418,14 @@ void ts3plugin_initHotkeys(struct PluginHotkey*** hotkeys) {
 	 * The keyword will be later passed to ts3plugin_onHotkeyEvent to identify which hotkey was triggered.
 	 * The description is shown in the clients hotkey dialog. */
 	
-	BEGIN_CREATE_HOTKEYS(4);  // Create hotkeys. Size must be correct for allocating memory.
+	BEGIN_CREATE_HOTKEYS(7);  // Create hotkeys. Size must be correct for allocating memory.
 	CREATE_HOTKEY("MoveToOwnChannel", "Move clients from selected channel to my channel");
 	CREATE_HOTKEY("MoveToSelectedChannel", "Move clients from my channel to selected channel");
 	CREATE_HOTKEY("Follow", "Follow user");
 	CREATE_HOTKEY("Unfollow", "Unfollow user");
+	CREATE_HOTKEY("LockMovement", "Lock user movement");
+	CREATE_HOTKEY("UnlockMovement", "Unlock user movement");
+	CREATE_HOTKEY("UnlockAllMovement", "Unlock all users movement");
 	END_CREATE_HOTKEYS;
 
 	/* The client will call ts3plugin_freeMemory to release all allocated memory */
@@ -474,6 +480,12 @@ void ts3plugin_onMenuItemEvent(uint64 serverConnectionHandlerID, enum PluginMenu
 		break;
 	case MENU_ID_GLOBAL_UNFOLLOW:
 		disableFollow();
+	case MENU_ID_GLOBAL_UNLOCK_MOVEMENT:
+		locked_users.clear();
+		locked_user_channels.clear();
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_GLOBAL_UNLOCK_MOVEMENT, 0);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_LOCK_MOVEMENT, 1);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNLOCK_MOVEMENT, 0);
 	}
 	
 }
@@ -499,6 +511,23 @@ void ts3plugin_onHotkeyEvent(const char* keyword) {
 		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_FOLLOW, 1);
 		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNFOLLOW, 0);
 		disableFollow();
+	}
+	else if (strncmp(keyword, "LockMovement", strlen(keyword)) == 0 && user_selected) {
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_LOCK_MOVEMENT, 0);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNLOCK_MOVEMENT, 1);
+		lockUser(ts3Functions.getCurrentServerConnectionHandlerID(), selected_user);
+	}
+	else if (strncmp(keyword, "UnlockLockMovement", strlen(keyword)) == 0 && user_selected) {
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_LOCK_MOVEMENT, 1);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNLOCK_MOVEMENT, 0);
+		unlockUser(ts3Functions.getCurrentServerConnectionHandlerID(), selected_user);
+	}
+	else if (strncmp(keyword, "UnlockAllLockMovement", strlen(keyword)) == 0 && user_selected) {
+		locked_users.clear();
+		locked_user_channels.clear();
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_GLOBAL_UNLOCK_MOVEMENT, 0);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_LOCK_MOVEMENT, 1);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNLOCK_MOVEMENT, 0);
 	}
 }
 
@@ -646,6 +675,7 @@ void lockUser(uint64 serverConnectionHandlerID, anyID userID) {
 	R_ASSERT(std::find(locked_users.begin(), locked_users.end(), clientDBID) == locked_users.cend(), "Error trying to lock already locked user!");
 	locked_users.push_back(clientDBID);
 	locked_user_channels.push_back(userChannel);
+	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_GLOBAL_UNLOCK_MOVEMENT, 1);
 }
 
 void unlockUser(uint64 serverConnectionHandlerID, anyID userID) {
@@ -658,6 +688,10 @@ void unlockUser(uint64 serverConnectionHandlerID, anyID userID) {
 	const int ndx = std::distance(locked_users.begin(), it);
 	locked_users.erase(it);
 	locked_user_channels.erase(locked_user_channels.begin() + ndx);
+	
+	if (locked_users.empty()) {
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_GLOBAL_UNLOCK_MOVEMENT, 1);
+	}
 }
 
 void join(uint64 serverConnectionHandlerID, anyID targetClientID) {
