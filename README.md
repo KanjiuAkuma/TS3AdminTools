@@ -3,8 +3,9 @@ Ts3 Utility Functions
 
 # Available Functions
 
-Mass move
-Client follow
+- Mass move
+- Follow client
+- Lock client in channel
 
 # Planned Functions
 Dunno, give me some input...
