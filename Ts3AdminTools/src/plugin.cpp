@@ -389,6 +389,7 @@ void ts3plugin_initMenus(struct PluginMenuItem*** menuItems, char** menuIcon) {
 	// disable 'reverse actions'
 	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNFOLLOW, 0);
 	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNLOCK_MOVEMENT, 0);
+	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_GLOBAL_UNFOLLOW, 0);
 }
 
 /* Helper function to create a hotkey */
@@ -677,6 +678,7 @@ void join(uint64 serverConnectionHandlerID, anyID targetClientID) {
 void enableFollow(uint64 serverConnectionHandlerID, anyID targetID) {
 	uint64 clientDBID;
 	R_CALL(ts3Functions.getClientVariableAsUInt64(serverConnectionHandlerID, targetID, CLIENT_DATABASE_ID, &clientDBID), "Error retreiving client db id!");
+	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_GLOBAL_UNFOLLOW, 1);
 	
 	follow_enable = true;
 	follow_target_db_id = clientDBID;
@@ -684,6 +686,7 @@ void enableFollow(uint64 serverConnectionHandlerID, anyID targetID) {
 }
 
 void disableFollow() {
+	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_GLOBAL_UNFOLLOW, 0);
 	follow_enable = false;
 	follow_target_db_id = 0;
 }
