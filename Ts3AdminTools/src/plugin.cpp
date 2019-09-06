@@ -20,6 +20,7 @@
 #include "teamspeak/clientlib_publicdefinitions.h"
 #include "ts3_functions.h"
 #include "plugin.h"
+#include <vector>
 
 static struct TS3Functions ts3Functions;
 
@@ -41,29 +42,12 @@ static struct TS3Functions ts3Functions;
 
 static char* pluginID = NULL;
 
-
-/*********************************** Mass move variables ************************************/
-/*
- * 
- */
-static bool channel_selected = false;
-static uint64 selected_channel = 0;
-
-/*********************************** Follow variables ************************************/
-/*
- *
- */
-static bool follow_enable = false;
-static anyID follow_target = 0;
-static bool user_selected = false;
-static anyID selected_user = 0;
-
 #ifdef _WIN32
 /* Helper function to convert wchar_T to Utf-8 encoded strings on Windows */
 static int wcharToUtf8(const wchar_t* str, char** result) {
 	int outlen = WideCharToMultiByte(CP_UTF8, 0, str, -1, 0, 0, 0, 0);
 	*result = (char*)malloc(outlen);
-	if(WideCharToMultiByte(CP_UTF8, 0, str, -1, *result, outlen, 0, 0) == 0) {
+	if (WideCharToMultiByte(CP_UTF8, 0, str, -1, *result, outlen, 0, 0) == 0) {
 		*result = NULL;
 		return -1;
 	}
@@ -71,26 +55,62 @@ static int wcharToUtf8(const wchar_t* str, char** result) {
 }
 #endif
 
+
+/*********************************** My Macros ************************************/
+/*
+ *
+ */
 #ifdef AT_RELEASE
-#define ASSERT(x, msg) x
-#define R_ASSERT(x, msg) {unsigend r = x; if (r != ERROR_ok) return;}
-#define RV_ASSERT(x, msg, rv) {unsigend r = x; if (r != ERROR_ok) return rv;}
+#define ASSERT(x, msg)
+#define R_ASSERT(x, msg) if (!(x)) {return;}
+#define CALL(x, msg) {unsigned int r = x;}
+#define R_CALL(x, msg) {unsigned int r = x; if (r != ERROR_ok) {return;}}
+#define RV_CALL(x, msg, rv) {unsigned int r = x; if (r != ERROR_ok) {return rv;}}
 #else
+#define ASSERT(x, msg) if (!(x)) printf(msg)
+#define R_ASSERT(x, msg) if (!(x)) {printf(msg); return;}
 #define CALL(x, msg) {unsigned int r = x; if (r != ERROR_ok) {printf("Error %d at '%s'\n", r, msg);}}
 #define R_CALL(x, msg) {unsigned int r = x; if (r != ERROR_ok) {printf("Error %d at '%s'\n", r, msg); return;}}
 #define RV_CALL(x, msg, rv) {unsigned int r = x; if (r != ERROR_ok) {printf("Error %d at '%s'\n", r, msg); return rv;}}
 #endif
 
+
+ /*********************************** UI Variables ************************************/
+ /*
+  *
+  */
+static bool channel_selected = false;
+static uint64 selected_channel = 0;
+static bool user_selected = false;
+static anyID selected_user = 0;
+
+
+/*********************************** Follow variables ************************************/
 /*
- * Menu IDs for this plugin. Pass these IDs when creating a menuitem to the TS3 client. When the menu item is triggered,
- * ts3plugin_onMenuItemEvent will be called passing the menu ID of the triggered menu item.
- * These IDs are freely choosable by the plugin author. It's not really needed to use an enum, it just looks prettier.
+ *
+ */
+static bool follow_enable = false;
+static anyID follow_target = 0;
+
+
+/*********************************** Locked user variables ************************************/
+/*
+ *
+ */
+static std::vector<anyID> locked_users = std::vector<anyID>();
+static std::vector<uint64> locked_user_channels = std::vector<uint64>();
+
+/*********************************** Menu Item Ids ************************************/
+/*
+ *
  */
 enum {
-	MENU_ID_CHANNEL_1,
-	MENU_ID_CHANNEL_2,
-	MENU_ID_CLIENT_1,
-	MENU_ID_CLIENT_2,
+	MENU_ID_CHANNEL_FROM,
+	MENU_ID_CHANNEL_TO,
+	MENU_ID_CLIENT_FOLLOW,
+	MENU_ID_CLIENT_UNFOLLOW,
+	MENU_ID_CLIENT_LOCK_MOVEMENT,
+	MENU_ID_CLIENT_UNLOCK_MOVEMENT,
 };
 
 /*********************************** Required functions ************************************/
@@ -265,26 +285,28 @@ void ts3plugin_infoData(uint64 serverConnectionHandlerID, uint64 id, enum Plugin
 		R_CALL(ts3Functions.getChannelOfClient(serverConnectionHandlerID, clientID, &clientChannelID), "Error retrieving client channel!");
 
 		if (clientChannelID == id) { // channel is clients channel -> disable move menu items
-			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CHANNEL_1, 0);
-			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CHANNEL_2, 0);
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CHANNEL_FROM, 0);
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CHANNEL_TO, 0);
 			selected_channel = 0;
 			channel_selected = false;
 		}
 		else {
-			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CHANNEL_1, 1);
-			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CHANNEL_2, 1);
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CHANNEL_FROM, 1);
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CHANNEL_TO, 1);
 			selected_channel = id;
 			channel_selected = true;
 		}
 	}
 	
 	if (type == PLUGIN_CLIENT) {
-		anyID clientID;
-		R_CALL(ts3Functions.getClientID(serverConnectionHandlerID, &clientID), "Error retrieving client id!");
+		anyID myClientID;
+		R_CALL(ts3Functions.getClientID(serverConnectionHandlerID, &myClientID), "Error retrieving client id!");
 
-		if (clientID == id) { // is myself -> disable follow menu items
-			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 0);
-			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 0);
+		if (myClientID == id) { // is myself -> disable follow menu items
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_FOLLOW, 0);
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNFOLLOW, 0);
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_LOCK_MOVEMENT, 0);
+			ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNLOCK_MOVEMENT, 0);
 			user_selected = false;
 			selected_user = 0;
 		}
@@ -292,12 +314,21 @@ void ts3plugin_infoData(uint64 serverConnectionHandlerID, uint64 id, enum Plugin
 			user_selected = true;
 			selected_user = id;
 			if (follow_enable) {
-				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 0);
-				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 1);
+				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_FOLLOW, 0);
+				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNFOLLOW, 1);
 			}
 			else {
-				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 1);
-				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 0);
+				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_FOLLOW, 1);
+				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNFOLLOW, 0);
+			}
+
+			if (!locked_users.empty() && std::find(locked_users.begin(), locked_users.end(), selected_user) != locked_users.cend()) {
+				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_LOCK_MOVEMENT, 0);
+				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNLOCK_MOVEMENT, 1);
+			}
+			else {
+				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_LOCK_MOVEMENT, 1);
+				ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNLOCK_MOVEMENT, 0);
 			}
 		}
 		
@@ -340,13 +371,18 @@ static struct PluginMenuItem* createMenuItem(enum PluginMenuType type, int id, c
  * If plugin menus are not used by a plugin, do not implement this function or return NULL.
  */
 void ts3plugin_initMenus(struct PluginMenuItem*** menuItems, char** menuIcon) {
-	BEGIN_CREATE_MENUS(4);  /* IMPORTANT: Number of menu items must be correct! */
-	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CHANNEL, MENU_ID_CHANNEL_1, "Move all users from this channel to your channel", "1.png");
-	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CHANNEL, MENU_ID_CHANNEL_2, "Move all users from your channel to this channel", "2.png");
-	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CLIENT, MENU_ID_CLIENT_1, "Follow", "3.png");
-	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CLIENT, MENU_ID_CLIENT_2, "Unfollow", "4.png");
+	BEGIN_CREATE_MENUS(6);  /* IMPORTANT: Number of menu items must be correct! */
+	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CHANNEL, MENU_ID_CHANNEL_FROM, "Move all users from this channel to your channel", "1.png");
+	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CHANNEL, MENU_ID_CHANNEL_TO, "Move all users from your channel to this channel", "2.png");
+	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CLIENT, MENU_ID_CLIENT_FOLLOW, "Follow", "3.png");
+	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CLIENT, MENU_ID_CLIENT_UNFOLLOW, "Unfollow", "4.png");
+	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CLIENT, MENU_ID_CLIENT_LOCK_MOVEMENT, "Lock movement", "5.png");
+	CREATE_MENU_ITEM(PLUGIN_MENU_TYPE_CLIENT, MENU_ID_CLIENT_UNLOCK_MOVEMENT, "Unlock movement", "6.png");
 	END_CREATE_MENUS;  /* Includes an assert checking if the number of menu items matched */
-	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 0);
+
+	// disable 'reverse actions'
+	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNFOLLOW, 0);
+	ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNLOCK_MOVEMENT, 0);
 }
 
 /* Helper function to create a hotkey */
@@ -400,30 +436,37 @@ void ts3plugin_initHotkeys(struct PluginHotkey*** hotkeys) {
  */
 void ts3plugin_onMenuItemEvent(uint64 serverConnectionHandlerID, enum PluginMenuType type, int menuItemID, uint64 selectedItemID) {
 	printf("PLUGIN: onMenuItemEvent: serverConnectionHandlerID=%llu, type=%d, menuItemID=%d, selectedItemID=%llu\n", (long long unsigned int)serverConnectionHandlerID, type, menuItemID, (long long unsigned int)selectedItemID);
-
 	switch (menuItemID) {
-	case MENU_ID_CHANNEL_1:
+	case MENU_ID_CHANNEL_FROM:
 		// Menu channel 1 was triggered (move users to yours)
 		moveClientsToOwnChannel(serverConnectionHandlerID, selectedItemID);
 		break;
-	case MENU_ID_CHANNEL_2:
+	case MENU_ID_CHANNEL_TO:
 		// Menu channel 2 was triggered (move users to target)
 		moveClientsToSelectedChannel(serverConnectionHandlerID, selectedItemID);
 		break;
-	case MENU_ID_CLIENT_1:
-		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 0);
-		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 1);
+	case MENU_ID_CLIENT_FOLLOW:
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_FOLLOW, 0);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNFOLLOW, 1);
 		follow_enable = true;
 		follow_target = selectedItemID;
 		join(serverConnectionHandlerID, follow_target);
 		break;
-	case MENU_ID_CLIENT_2:
-		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 1);
-		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 0);
+	case MENU_ID_CLIENT_UNFOLLOW:
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_FOLLOW, 1);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNFOLLOW, 0);
 		follow_enable = false;
 		follow_target = 0;
 		break;
-	default:
+	case MENU_ID_CLIENT_LOCK_MOVEMENT:
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_LOCK_MOVEMENT, 0);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNLOCK_MOVEMENT, 1);
+		lockUser(serverConnectionHandlerID, selectedItemID);
+		break;
+	case MENU_ID_CLIENT_UNLOCK_MOVEMENT:
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_LOCK_MOVEMENT, 1);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNLOCK_MOVEMENT, 0);
+		unlockUser(selectedItemID);
 		break;
 	}
 	
@@ -442,15 +485,15 @@ void ts3plugin_onHotkeyEvent(const char* keyword) {
 		moveClientsToSelectedChannel(ts3Functions.getCurrentServerConnectionHandlerID(), selected_channel);
 	}
 	else if (strncmp(keyword, "Follow", strlen(keyword)) == 0 && user_selected) {
-		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 0);
-		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 1);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_FOLLOW, 0);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNFOLLOW, 1);
 		follow_enable = true;
 		follow_target = selected_user;
 		join(ts3Functions.getCurrentServerConnectionHandlerID(), follow_target);
 	}
 	else if (strncmp(keyword, "Unfollow", strlen(keyword)) == 0 && follow_enable) {
-		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_1, 1);
-		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_2, 0);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_FOLLOW, 1);
+		ts3Functions.setPluginMenuEnabled(pluginID, MENU_ID_CLIENT_UNFOLLOW, 0);
 		follow_enable = false;
 		follow_target = 0;
 	}
@@ -480,37 +523,27 @@ const char* ts3plugin_keyPrefix() {
 
 void ts3plugin_onClientMoveEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, const char* moveMessage) {
 	printf("Client moved (Self)! clid=%d, oCid=%llu, nCid=%llu\n", clientID, oldChannelID, newChannelID);
-	if (follow_enable && follow_target == clientID) {
-		follow(serverConnectionHandlerID, newChannelID);
-	}
+	onClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID, false, "Changed channel");
 }
 
 void ts3plugin_onClientMoveTimeoutEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, const char* timeoutMessage) {
 	printf("Client moved (Timeout)! clid=%d, oCid=%llu, nCid=%llu\n", clientID, oldChannelID, newChannelID);
-	if (follow_enable && follow_target == clientID) {
-		follow(serverConnectionHandlerID, newChannelID);
-	}
+	onClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID, true, "Timouted");
 }
 
 void ts3plugin_onClientMoveMovedEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, anyID moverID, const char* moverName, const char* moverUniqueIdentifier, const char* moveMessage) {
 	printf("Client moved (Got moved)! clid=%d, oCid=%llu, nCid=%llu\n", clientID, oldChannelID, newChannelID);
-	if (follow_enable && follow_target == clientID) {
-		follow(serverConnectionHandlerID, newChannelID);
-	}
+	onClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID, true, "Got moved");
 }
 
 void ts3plugin_onClientKickFromChannelEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, anyID kickerID, const char* kickerName, const char* kickerUniqueIdentifier, const char* kickMessage) {
 	printf("Client moved (Kick from channel! clid=%d, oCid=%llu, nCid=%llu\n", clientID, oldChannelID, newChannelID);
-	if (follow_enable && follow_target == clientID) {
-		follow(serverConnectionHandlerID, newChannelID);
-	}
+	onClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID, true, "Channel kick");
 }
 
 void ts3plugin_onClientKickFromServerEvent(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, int visibility, anyID kickerID, const char* kickerName, const char* kickerUniqueIdentifier, const char* kickMessage) {
 	printf("Client moved (Kick from server)! clid=%d, oCid=%llu, nCid=%llu\n", clientID, oldChannelID, newChannelID);
-	if (follow_enable && follow_target == clientID) {
-		follow(serverConnectionHandlerID, newChannelID);
-	}
+	onClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID, true, "Server kick");
 }
 
 
@@ -547,6 +580,75 @@ void moveClientsToOwnChannel(uint64 serverConnectionHandlerID, uint64 channelID)
 	}
 	ts3Functions.freeMemory(clients);
 
+}
+
+struct move_data {
+	uint64 serverConnectionHandlerID;
+	anyID clientID;
+	uint64 oldChannelID;
+	uint64 newChannelID;
+	bool was_moved;
+};
+
+void onClientMoved(uint64 serverConnectionHandlerID, anyID clientID, uint64 oldChannelID, uint64 newChannelID, bool was_moved, const char* moveType) {
+	static move_data last_move = move_data{ 0, 0, 0, 0, false };
+	if (newChannelID == 0) {
+		// client left server
+		if (!locked_users.empty()) {
+			const auto it = std::find(locked_users.begin(), locked_users.end(), clientID);
+			if (it != locked_users.cend()) {
+				const int ndx = std::distance(locked_users.begin(), it);
+				locked_users.erase(it);
+				locked_user_channels.erase(locked_user_channels.begin() + ndx);
+			}
+		}
+	}
+
+	printf("Client move ('%s'), clid=%d, oCid=%llu, nCid=%llu, was_moved=%d\n", moveType, clientID, oldChannelID, newChannelID, was_moved);
+	if (last_move.clientID == clientID && last_move.oldChannelID == oldChannelID && last_move.newChannelID == newChannelID && last_move.was_moved == was_moved) {
+		printf("Repeatmove, skipping\n");
+		last_move = move_data{ 0, 0, 0, 0, false };
+		return;
+	}
+	last_move = move_data{ serverConnectionHandlerID, clientID, oldChannelID, newChannelID, was_moved };
+
+	if (follow_enable && follow_target == clientID) {
+		follow(serverConnectionHandlerID, newChannelID);
+	}
+	if (!locked_users.empty()) {
+		const auto it = std::find(locked_users.begin(), locked_users.end(), clientID);
+		if (it != locked_users.cend()) {
+			const int ndx = std::distance(locked_users.begin(), it);
+			if (!was_moved) {
+				printf("Restricting user movement clid=%d\n", clientID);
+				const uint64 locked_channel = locked_user_channels[ndx];
+				if (newChannelID != locked_channel) {
+					CALL(ts3Functions.requestClientMove(serverConnectionHandlerID, clientID, locked_channel, "", NULL), "Error moving client!");
+				}
+			}
+			else {
+				printf("Updating movement restricted user channel clid=%d, cid=%llu\n", clientID, newChannelID);
+				locked_user_channels[ndx] = newChannelID;
+			}
+		}
+	}
+}
+
+void lockUser(uint64 serverConnectionHandlerID, anyID userID) {
+	uint64 userChannel;
+	R_CALL(ts3Functions.getChannelOfClient(serverConnectionHandlerID, userID, &userChannel), "Error retrieving client channel!");
+	R_ASSERT(std::find(locked_users.begin(), locked_users.end(), userID) == locked_users.cend(), "Error trying to lock already locked user!");
+	locked_users.push_back(userID);
+	locked_user_channels.push_back(userChannel);
+}
+
+void unlockUser(anyID userID) {
+	R_ASSERT(!locked_users.empty(), "Error trying to unlock user but no users locked!");
+	const auto it = std::find(locked_users.begin(), locked_users.end(), userID);
+	R_ASSERT(it != locked_users.cend(), "Error trying to unlock non-locked user!");
+	const int ndx = std::distance(locked_users.begin(), it);
+	locked_users.erase(it);
+	locked_user_channels.erase(locked_user_channels.begin() + ndx);
 }
 
 void join(uint64 serverConnectionHandlerID, anyID targetClientID) {
