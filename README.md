@@ -1,4 +1,4 @@
-# TS3AdminToolsV2
+# ts3 admin tools
 Ts3 Utility Functions
 
 # Available Functions
